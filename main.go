@@ -43,6 +43,7 @@ func main() {
 	lnk, err := link.AttachXDP(link.XDPOptions{
 		Program:   objs.XdpDropFunc,
 		Interface: iface.Index,
+		Flags:     link.XDPGenericMode, // <-- ADD THIS LINE
 	})
 	if err != nil {
 		log.Fatalf("Failed to attach XDP program: %v", err)

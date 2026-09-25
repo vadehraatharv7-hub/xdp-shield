@@ -11,8 +11,8 @@
  * 1. BPF Map Definition
  * In eBPF, a "map" is a shared data structure between kernel space and user space.
  * Here we define a Hash Table:
- * - Key: __u32 (IPv4 address stored as an unsigned 32-bit integer)
- * - Value: __u32 (1 = dropped, or a ban timestamp)
+ * - Key: __u32 (IPv4 address stored as an unsigned 32-bit integer) Why??
+ * - Value: __u32 (1 = dropped, or a ban timestamp) What is the ban time stamp?
  * - Max entries: 65,536 blocked IPs simultaneously in kernel memory
  */
 struct {
