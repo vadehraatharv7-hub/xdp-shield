@@ -1,9 +1,7 @@
-// main.go
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpf bpf ./bpf/xdp_drop.c
-
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -13,9 +11,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/redis/go-redis/v9"
 )
+
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpf bpf ./bpf/xdp_drop.c
 
 func main() {
 	ifaceName := flag.String("iface", "eth0", "Network interface to attach XDP to")
@@ -43,7 +45,7 @@ func main() {
 	lnk, err := link.AttachXDP(link.XDPOptions{
 		Program:   objs.XdpDropFunc,
 		Interface: iface.Index,
-		Flags:     link.XDPGenericMode, // <-- ADD THIS LINE
+		Flags:     link.XDPGenericMode,
 	})
 	if err != nil {
 		log.Fatalf("Failed to attach XDP program: %v", err)
@@ -51,6 +53,36 @@ func main() {
 	defer lnk.Close()
 
 	fmt.Printf("[+] XDP Shield attached to %s. Awaiting ban feeds...\n", *ifaceName)
+
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	rdb := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+	})
+
+	ctx := context.Background()
+	pubsub := rdb.Subscribe(ctx, "ban_feed")
+	defer pubsub.Close()
+
+	go func() {
+		ch := pubsub.Channel()
+		for msg := range ch {
+			ipStr := msg.Payload
+			ipKey, err := ipToUint32(ipStr)
+			if err != nil {
+				log.Printf("Invalid IP received from ban_feed: %s", ipStr)
+				continue
+			}
+			err = objs.DropMap.Update(ipKey, uint32(1), ebpf.UpdateAny)
+			if err != nil {
+				log.Printf("Failed to update DropMap for IP %s: %v", ipStr, err)
+			} else {
+				log.Printf("Banned IP updated in eBPF map: %s", ipStr)
+			}
+		}
+	}()
 
 	// Keep agent running until an exit signal (Ctrl+C, SIGTERM) is received
 	stop := make(chan os.Signal, 1)
