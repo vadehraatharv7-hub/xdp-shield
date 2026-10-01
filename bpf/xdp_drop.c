@@ -16,7 +16,7 @@
  * - Max entries: 65,536 blocked IPs simultaneously in kernel memory
  */
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 65536);
     __type(key, __u32);
     __type(value, __u32);
