@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 )
@@ -60,26 +58,22 @@ func main() {
 		apiUrl = "http://10.0.2.4:8081/api/threats/banned"
 	}
 
+	client := &http.Client{Timeout: 8 * time.Second}
 	go func() {
 		for {
-			resp, err := http.Get(apiUrl)
+			banned, err := fetchBans(client, apiUrl)
 			if err != nil {
+				// Keep the current rules: a dashboard outage must neither unblock nor block anyone.
 				log.Printf("Failed to fetch banned IPs: %v", err)
 				time.Sleep(10 * time.Second)
 				continue
 			}
-			var ips []BannedIP
-			if err := json.NewDecoder(resp.Body).Decode(&ips); err != nil {
-				log.Printf("Failed to decode banned IPs: %v", err)
-			} else {
-				for _, b := range ips {
-					ipKey, err := ipToUint32(b.IP)
-					if err == nil {
-						objs.DropMap.Update(ipKey, uint32(1), ebpf.UpdateAny)
-					}
-				}
+			added, removed, err := syncBans(kernelMap{objs.DropMap}, banned)
+			if err != nil {
+				log.Printf("Failed to sync drop map: %v", err)
+			} else if added > 0 || removed > 0 {
+				log.Printf("Drop map updated: +%d blocked, -%d unblocked (%d listed)", added, removed, len(banned))
 			}
-			resp.Body.Close()
 			time.Sleep(10 * time.Second)
 		}
 	}()
@@ -91,10 +85,18 @@ func main() {
 	fmt.Println("\n[*] Detaching XDP hook and exiting cleanly...")
 }
 
-func ipToUint32(ipStr string) (uint32, error) {
-	ip := net.ParseIP(ipStr).To4()
-	if ip == nil {
-		return 0, fmt.Errorf("invalid IPv4 address: %s", ipStr)
+func fetchBans(c *http.Client, url string) ([]BannedIP, error) {
+	resp, err := c.Get(url)
+	if err != nil {
+		return nil, err
 	}
-	return binary.LittleEndian.Uint32(ip), nil
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected HTTP %d", resp.StatusCode)
+	}
+	var ips []BannedIP
+	if err := json.NewDecoder(resp.Body).Decode(&ips); err != nil {
+		return nil, fmt.Errorf("decoding ban list: %w", err)
+	}
+	return ips, nil
 }
